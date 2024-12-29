@@ -699,16 +699,6 @@ namespace AdminTools
                 return;
             }
 
-            // Log the full hierarchy for debugging
-            _logger.LogInfo("Searching for ItemsContent in hierarchy:");
-            Transform current = windowObject.transform;
-            while (current != null)
-            {
-                _logger.LogInfo($"- {current.name}");
-                current = current.parent;
-            }
-
-            // Try to find ItemsList first
             Transform itemsList = windowObject.transform.Find("Panel/Content/ItemsList");
             if (itemsList == null)
             {
@@ -722,84 +712,14 @@ namespace AdminTools
             {
                 _logger.LogInfo("Creating ScrollView structure");
                 CreateItemsScrollView(itemsList.gameObject);
+                return; // CreateItemsScrollView will handle initialization
             }
 
-            Transform content = itemsList.Find("ScrollView/Viewport/ItemsContent");
-            if (content == null)
+            // If ScrollView exists, just update the virtual scroller
+            ScrollRect scroll = scrollView.GetComponent<ScrollRect>();
+            if (scroll != null && items != null && items.Count > 0)
             {
-                _logger.LogError("ItemsContent still not found after creation!");
-                return;
-            }
-
-            // Clear existing items
-            foreach (Transform child in content)
-            {
-                Destroy(child.gameObject);
-            }
-
-            foreach (TemplateItem item in items)
-            {
-                GameObject itemButton = new GameObject(item.id);
-                itemButton.transform.SetParent(content, false);
-
-                RectTransform rectTransform = itemButton.AddComponent<RectTransform>();
-                rectTransform.anchorMin = new Vector2(0, 0);
-                rectTransform.anchorMax = new Vector2(1, 0);
-                rectTransform.sizeDelta = new Vector2(-16, 28);  // Added horizontal padding
-                rectTransform.anchoredPosition = new Vector2(8, 0);  // Center the button
-
-                LayoutElement layoutElement = itemButton.AddComponent<LayoutElement>();
-                layoutElement.minHeight = 28;
-                layoutElement.flexibleWidth = 1;
-                layoutElement.minWidth = -1;  // Allow the layout to handle width
-                layoutElement.preferredWidth = -1;  // Allow the layout to handle width
-
-                Image buttonBg = itemButton.AddComponent<Image>();
-                buttonBg.color = new Color(0.2f, 0.2f, 0.2f, 1f);
-
-                Button button = itemButton.AddComponent<Button>();
-                ColorBlock colors = button.colors;
-                colors.normalColor = new Color(0.2f, 0.2f, 0.2f, 1f);
-                colors.highlightedColor = new Color(0.3f, 0.3f, 0.3f, 1f);
-                colors.pressedColor = new Color(0.25f, 0.25f, 0.25f, 1f);
-                colors.selectedColor = new Color(0.3f, 0.3f, 0.3f, 1f);
-                colors.fadeDuration = 0.1f;
-                button.colors = colors;
-
-                // Create text container
-                GameObject textContainer = new GameObject("Text");
-                textContainer.transform.SetParent(itemButton.transform, false);
-
-                RectTransform textRect = textContainer.AddComponent<RectTransform>();
-                textRect.anchorMin = new Vector2(0, 0);
-                textRect.anchorMax = new Vector2(1, 1);
-                textRect.sizeDelta = new Vector2(-24, 0);
-                textRect.anchoredPosition = Vector2.zero;
-
-                TextMeshProUGUI itemText = textContainer.AddComponent<TextMeshProUGUI>();
-                itemText.text = item.name;
-                itemText.fontSize = 13;
-                itemText.alignment = TextAlignmentOptions.Left;
-                itemText.enableWordWrapping = false;
-                itemText.overflowMode = TextOverflowModes.Ellipsis;
-                itemText.margin = new Vector4(40, 0, 0, 0);
-                itemText.color = new Color(0.9f, 0.9f, 0.9f, 0.95f);
-
-                // Button click handler
-                button.onClick.AddListener(() => {
-                    selectedItem = item;
-
-                    // Update visual selection
-                    foreach (Transform child in content)
-                    {
-                        child.GetComponent<Image>().color =
-                            child.name == item.id ?
-                            new Color(0.3f, 0.3f, 0.32f, 1f) :
-                            new Color(0.2f, 0.2f, 0.22f, 0.8f);
-                    }
-
-                    UpdateItemDetails();
-                });
+                new VirtualScrollController(scroll, items, this);
             }
         }
 
@@ -1268,32 +1188,45 @@ namespace AdminTools
                 RectTransform rectTransform = itemButton.AddComponent<RectTransform>();
                 rectTransform.anchorMin = new Vector2(0, 1);
                 rectTransform.anchorMax = new Vector2(1, 1);
-                rectTransform.sizeDelta = new Vector2(0, itemHeight);
+                rectTransform.sizeDelta = new Vector2(-10, itemHeight - 2); // Added horizontal padding and vertical spacing
                 rectTransform.pivot = new Vector2(0.5f, 1);
 
-                Image buttonBg = itemButton.AddComponent<Image>();
+                // Background object with rounded corners
+                GameObject background = new GameObject("Background");
+                background.transform.SetParent(itemButton.transform, false);
+
+                RectTransform bgRect = background.AddComponent<RectTransform>();
+                bgRect.anchorMin = Vector2.zero;
+                bgRect.anchorMax = Vector2.one;
+                bgRect.sizeDelta = Vector2.zero;
+                bgRect.offsetMin = new Vector2(0, 1); // Left and bottom margin
+                bgRect.offsetMax = new Vector2(0, -1); // Right and top margin
+
+                Image buttonBg = background.AddComponent<Image>();
                 buttonBg.color = new Color(0.2f, 0.2f, 0.2f, 1f);
 
-                Button button = itemButton.AddComponent<Button>();
-                ColorBlock colors = button.colors;
-                colors.normalColor = new Color(0.2f, 0.2f, 0.2f, 1f);
-                colors.highlightedColor = new Color(0.3f, 0.3f, 0.3f, 1f);
-                colors.pressedColor = new Color(0.25f, 0.25f, 0.25f, 1f);
-                colors.selectedColor = new Color(0.3f, 0.3f, 0.3f, 1f);
-                button.colors = colors;
+                // Text object
+                GameObject textObj = new GameObject("Text");
+                textObj.transform.SetParent(itemButton.transform, false);
 
-                GameObject textContainer = new GameObject("Text");
-                textContainer.transform.SetParent(itemButton.transform, false);
-
-                RectTransform textRect = textContainer.AddComponent<RectTransform>();
+                RectTransform textRect = textObj.AddComponent<RectTransform>();
                 textRect.anchorMin = Vector2.zero;
                 textRect.anchorMax = Vector2.one;
-                textRect.sizeDelta = new Vector2(-24, 0);
+                textRect.sizeDelta = Vector2.zero;
 
-                TextMeshProUGUI itemText = textContainer.AddComponent<TextMeshProUGUI>();
+                TextMeshProUGUI itemText = textObj.AddComponent<TextMeshProUGUI>();
                 itemText.fontSize = 13;
+                itemText.color = Color.white;
                 itemText.alignment = TextAlignmentOptions.Left;
-                itemText.color = new Color(0.9f, 0.9f, 0.9f, 0.95f);
+                itemText.margin = new Vector4(24, 0, 0, 0);
+                itemText.enableWordWrapping = false;
+                itemText.overflowMode = TextOverflowModes.Truncate;
+
+                // Button component on main object
+                Button button = itemButton.AddComponent<Button>();
+                button.transition = Selectable.Transition.None;
+                button.navigation = new Navigation { mode = Navigation.Mode.None };
+                button.targetGraphic = buttonBg;
 
                 return itemButton;
             }
@@ -1358,8 +1291,26 @@ namespace AdminTools
             {
                 foreach (var pooledItem in pooledItems)
                 {
-                    pooledItem.GetComponent<Image>().color = new Color(0.2f, 0.2f, 0.2f, 1f);
+                    var background = pooledItem.transform.Find("Background");
+                    if (background != null)
+                    {
+                        var buttonBg = background.GetComponent<Image>();
+                        buttonBg.color = new Color(0.2f, 0.2f, 0.2f, 1f);
+                    }
                 }
+
+                var selectedPooledItem = pooledItems.FirstOrDefault(p =>
+                    p.GetComponentInChildren<TextMeshProUGUI>()?.text == item.name);
+                if (selectedPooledItem != null)
+                {
+                    var background = selectedPooledItem.transform.Find("Background");
+                    if (background != null)
+                    {
+                        var buttonBg = background.GetComponent<Image>();
+                        buttonBg.color = new Color(0.3f, 0.5f, 0.9f, 1f);
+                    }
+                }
+
                 parent.selectedItem = item;
                 parent.UpdateItemDetails();
             }
