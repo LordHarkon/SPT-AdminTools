@@ -18,6 +18,7 @@ using SPT.Common.Http;
 using System.Threading.Tasks;
 using System.Net.Http;
 using EFT.UI;
+using System.Text;
 
 namespace AdminTools
 {
@@ -791,9 +792,9 @@ namespace AdminTools
             }
         }
 
-        private void UpdateItemDetails()
+        private void UpdateItemDetails(TemplateItem details)
         {
-            if (selectedItem == null) return;
+            if (details == null) return;
 
             Transform detailsPanel = windowObject.transform.Find("Panel/Content/ItemDetails");
             if (detailsPanel == null) return;
@@ -812,8 +813,8 @@ namespace AdminTools
             scrollRect.anchorMin = Vector2.zero;
             scrollRect.anchorMax = Vector2.one;
             scrollRect.sizeDelta = Vector2.zero;
-            scrollRect.offsetMin = new Vector2(5, 5);  // Left, Bottom padding
-            scrollRect.offsetMax = new Vector2(-5, -5); // Right, Top padding
+            scrollRect.offsetMin = new Vector2(5, 5);
+            scrollRect.offsetMax = new Vector2(-5, -5);
 
             ScrollRect scroll = scrollView.AddComponent<ScrollRect>();
             Image scrollBg = scrollView.AddComponent<Image>();
@@ -843,7 +844,7 @@ namespace AdminTools
             VerticalLayoutGroup layout = content.AddComponent<VerticalLayoutGroup>();
             ContentSizeFitter fitter = content.AddComponent<ContentSizeFitter>();
 
-            layout.padding = new RectOffset(5, 5, 5, 5);
+            layout.padding = new RectOffset(50, 45, 0, 0);
             layout.spacing = 5;
             layout.childAlignment = TextAnchor.UpperLeft;
             layout.childControlWidth = true;
@@ -859,10 +860,172 @@ namespace AdminTools
             scroll.vertical = true;
 
             // Add details sections
-            CreateDetailSection(content, "Name", selectedItem.name);
-            CreateDetailSection(content, "Description", selectedItem.description);
-            CreateDetailSection(content, "ID", selectedItem.id);
-            CreateDetailSection(content, "Price", $"{selectedItem.price:N0} ₽");
+            CreateDetailSection(content, "Name", details.name);
+            CreateDetailSection(content, "Description", details.description);
+            CreateDetailSection(content, "ID", details.id);
+            CreateDetailSection(content, "Price", $"{details.price:N0} ₽");
+
+            // Add bundle preview if available
+            if (!string.IsNullOrEmpty(details.bundle))
+            {
+                CreateBundlePreview(content, details.bundle);
+            }
+        }
+
+        private void CreateBundlePreview(GameObject parent, string bundlePath)
+        {
+            GameObject section = new GameObject("Section_Bundle");
+            section.transform.SetParent(parent.transform, false);
+
+            RectTransform sectionRect = section.AddComponent<RectTransform>();
+            sectionRect.anchorMin = Vector2.zero;
+            sectionRect.anchorMax = Vector2.one;
+            sectionRect.sizeDelta = Vector2.zero;
+
+            VerticalLayoutGroup layout = section.AddComponent<VerticalLayoutGroup>();
+            ContentSizeFitter fitter = section.AddComponent<ContentSizeFitter>();
+
+            layout.padding = new RectOffset(50, 50, 10, 10);
+            layout.spacing = 5;
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childForceExpandWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandHeight = false;
+
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            // Create bundle preview container
+            GameObject previewObj = new GameObject("Preview");
+            previewObj.transform.SetParent(section.transform, false);
+
+            RectTransform previewRect = previewObj.AddComponent<RectTransform>();
+            previewRect.anchorMin = new Vector2(0, 0);
+            previewRect.anchorMax = new Vector2(1, 1);
+            previewRect.sizeDelta = Vector2.zero;
+
+            // Add layout element for sizing
+            LayoutElement previewLayout = previewObj.AddComponent<LayoutElement>();
+            previewLayout.minHeight = 200;
+            previewLayout.preferredHeight = 200;
+            previewLayout.flexibleWidth = 1;
+
+            // Add image component for background
+            Image previewImage = previewObj.AddComponent<Image>();
+            previewImage.color = new Color(0.1f, 0.1f, 0.1f, 1f);
+
+            // Load and display bundle
+            if (!string.IsNullOrEmpty(bundlePath))
+            {
+                StartCoroutine(LoadBundle(bundlePath, previewObj));
+            }
+        }
+
+        private IEnumerator LoadBundle(string bundlePath, GameObject previewObj)
+        {
+            string gamePath = AppDomain.CurrentDomain.BaseDirectory;
+            string fullBundlePath = Path.Combine(gamePath, "EscapeFromTarkov_Data", "StreamingAssets", "Windows", bundlePath);
+
+            _logger.LogInfo($"Loading bundle from: {fullBundlePath}");
+
+            var bundle = AssetBundle.LoadFromFile(fullBundlePath);
+            if (bundle != null)
+            {
+                try
+                {
+                    string[] assetNames = bundle.GetAllAssetNames();
+                    _logger.LogInfo($"Available assets in bundle: {string.Join(", ", assetNames)}");
+
+                    // Look for container or simple model first
+                    string assetName = assetNames.FirstOrDefault(name =>
+                        name.Contains("_container.") ||
+                        name.Contains("_simple.") ||
+                        name.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase));
+
+                    if (!string.IsNullOrEmpty(assetName))
+                    {
+                        _logger.LogInfo($"Loading asset: {assetName}");
+
+                        var asset = bundle.LoadAsset<GameObject>(assetName);
+                        if (asset != null)
+                        {
+                            // Create preview container
+                            GameObject previewContainer = new GameObject("PreviewContainer");
+                            previewContainer.transform.SetParent(previewObj.transform, false);
+
+                            RectTransform containerRect = previewContainer.AddComponent<RectTransform>();
+                            containerRect.anchorMin = Vector2.zero;
+                            containerRect.anchorMax = Vector2.one;
+                            containerRect.sizeDelta = Vector2.zero;
+
+                            // Create image component
+                            Image itemImage = previewContainer.AddComponent<Image>();
+                            itemImage.preserveAspect = true;
+
+                            // Create render texture
+                            RenderTexture renderTexture = new RenderTexture(512, 512, 16, RenderTextureFormat.ARGB32);
+                            renderTexture.Create();
+
+                            // Setup camera
+                            GameObject cameraObj = new GameObject("PreviewCamera");
+                            Camera camera = cameraObj.AddComponent<Camera>();
+                            camera.clearFlags = CameraClearFlags.SolidColor;
+                            camera.backgroundColor = new Color(0.1f, 0.1f, 0.1f, 0f);
+                            camera.orthographic = true;
+                            camera.orthographicSize = 0.3f;
+                            camera.targetTexture = renderTexture;
+                            camera.transform.position = new Vector3(0, 0.3f, -1f);
+
+                            // Instantiate model
+                            GameObject model = Instantiate(asset);
+                            model.transform.position = Vector3.zero;
+                            model.transform.rotation = Quaternion.Euler(0, 45, 0);
+
+                            // Add lighting
+                            GameObject lightObj = new GameObject("PreviewLight");
+                            Light light = lightObj.AddComponent<Light>();
+                            light.type = LightType.Directional;
+                            light.intensity = 1.2f;
+                            lightObj.transform.rotation = Quaternion.Euler(50, -30, 0);
+
+                            // Render to texture
+                            camera.Render();
+
+                            // Convert render texture to sprite
+                            Texture2D tex = new Texture2D(renderTexture.width, renderTexture.height, TextureFormat.RGBA32, false);
+                            RenderTexture.active = renderTexture;
+                            tex.ReadPixels(new Rect(0, 0, renderTexture.width, renderTexture.height), 0, 0);
+                            tex.Apply();
+
+                            // Create and assign sprite
+                            Sprite sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+                            itemImage.sprite = sprite;
+
+                            // Cleanup
+                            yield return new WaitForEndOfFrame();
+                            RenderTexture.active = null;
+                            Destroy(model);
+                            Destroy(cameraObj);
+                            Destroy(lightObj);
+                            renderTexture.Release();
+                        }
+                        else
+                        {
+                            _logger.LogError($"Failed to load asset: {assetName}");
+                        }
+                    }
+                }
+                finally
+                {
+                    bundle.Unload(false);
+                }
+            }
+            else
+            {
+                _logger.LogError($"Failed to load bundle: {fullBundlePath}");
+            }
+
+            yield return null;
         }
 
         private void CreateDetailSection(GameObject parent, string label, string value)
@@ -1352,7 +1515,36 @@ namespace AdminTools
                 }
 
                 parent.selectedItem = item;
-                parent.UpdateItemDetails();
+                parent.StartCoroutine(UpdateItemDetailsAsync(item.id));
+            }
+
+            private IEnumerator UpdateItemDetailsAsync(string itemId)
+            {
+                string apiUrl = parent.GetBackendUrl();
+                string sessionId = parent.GetSessionId();
+
+                using (var client = new Client(apiUrl, sessionId))
+                {
+                    var jsonContent = JsonConvert.SerializeObject(new { id = itemId });
+                    var request = client.PostAsync("/admin-tools/items/info", Encoding.UTF8.GetBytes(jsonContent));
+                    while (!request.IsCompleted)
+                    {
+                        yield return null;
+                    }
+
+                    byte[] responseBytes = request.Result;
+                    string responseText = System.Text.Encoding.UTF8.GetString(responseBytes);
+                    var itemResponse = JsonConvert.DeserializeObject<ItemInfoResponse>(responseText);
+
+                    if (itemResponse?.data != null)
+                    {
+                        parent.UpdateItemDetails(itemResponse.data);
+                    }
+                    else
+                    {
+                        _logger.LogError($"Failed to get item info for {itemId}: Response data is null");
+                    }
+                }
             }
 
             private IEnumerator LoadIcon(string iconPath, Image iconImage)
@@ -1440,9 +1632,44 @@ namespace AdminTools
             }
         }
 
-        private class ItemData : MonoBehaviour
+        private IEnumerator GetItemInfo(string itemId)
         {
-            public string id;
+            string apiUrl = GetBackendUrl();
+            string sessionId = GetSessionId();
+
+            using (var client = new Client(apiUrl, sessionId))
+            {
+                var jsonContent = JsonConvert.SerializeObject(new { id = itemId });
+                var request = client.PostAsync("/admin-tools/items/info", Encoding.UTF8.GetBytes(jsonContent));
+                while (!request.IsCompleted)
+                {
+                    yield return null;
+                }
+
+                byte[] responseBytes = request.Result;
+                string responseText = System.Text.Encoding.UTF8.GetString(responseBytes);
+                var itemResponse = JsonConvert.DeserializeObject<ItemInfoResponse>(responseText);
+
+                if (itemResponse?.data != null)
+                {
+                    UpdateItemDetails(itemResponse.data);
+                }
+                else
+                {
+                    _logger.LogError($"Failed to get item info for {itemId}: Response data is null");
+                }
+            }
+        }
+
+        // Add this class to handle model rotation
+        private class ModelRotator : MonoBehaviour
+        {
+            private float rotationSpeed = 30f;
+
+            private void Update()
+            {
+                transform.Rotate(Vector3.up, rotationSpeed * Time.deltaTime);
+            }
         }
     }
 }

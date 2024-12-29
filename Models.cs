@@ -1,4 +1,5 @@
 using System;
+using UnityEngine;
 
 namespace AdminTools.Models
 {
@@ -10,5 +11,15 @@ namespace AdminTools.Models
         public string description { get; set; }
         public int price { get; set; }
         public string bundle { get; set; }
+    }
+
+    public class ItemData : MonoBehaviour
+    {
+        public string id;
+    }
+
+    public class ItemInfoResponse
+    {
+        public TemplateItem data { get; set; }
     }
 }
