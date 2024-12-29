@@ -26,9 +26,10 @@ namespace AdminTools
         private static BepInEx.Logging.ManualLogSource _logger;
         private GameObject windowObject;
         private ConfigEntry<KeyboardShortcut> ToggleKey { get; set; }
-        private string currentTab = "Items";
+        private string currentTab = "Welcome";
         private List<TemplateItem> items = new List<TemplateItem>();
         private TemplateItem selectedItem;
+        private const float itemHeight = 28f;  // Add at class level
 
         private void Awake()
         {
@@ -57,14 +58,13 @@ namespace AdminTools
 
         private void ToggleWindow()
         {
-            if (windowObject != null)
+            if (windowObject == null)
             {
-                Destroy(windowObject);
-                windowObject = null;
+                CreateWindow();
             }
             else
             {
-                CreateWindow();
+                windowObject.SetActive(!windowObject.activeSelf);
             }
         }
 
@@ -210,8 +210,7 @@ namespace AdminTools
 
             // Add click handler
             button.onClick.AddListener(() => {
-                Destroy(windowObject);
-                windowObject = null;
+                windowObject.SetActive(false);
             });
         }
 
@@ -327,6 +326,9 @@ namespace AdminTools
             contentRect.offsetMin = new Vector2(0, 0);
             contentRect.offsetMax = new Vector2(0, -60);
 
+            // Create welcome panel
+            CreateWelcomePanel(content);
+
             // Create split view for Items tab
             CreateItemsSplitView(content);
 
@@ -338,17 +340,48 @@ namespace AdminTools
             // Set initial visibility
             foreach (Transform child in content.transform)
             {
-                bool isVisible = false;
-                if (currentTab == "Items")
-                {
-                    isVisible = (child.name == "ItemsList" || child.name == "ItemDetails");
-                }
-                else
-                {
-                    isVisible = child.name == $"Content_{currentTab}";
-                }
-                child.gameObject.SetActive(isVisible);
+                child.gameObject.SetActive(child.name == $"Content_{currentTab}");
             }
+        }
+
+        private void CreateWelcomePanel(GameObject parent)
+        {
+            GameObject welcomePanel = new GameObject("Content_Welcome");
+            welcomePanel.transform.SetParent(parent.transform, false);
+
+            RectTransform rectTransform = welcomePanel.AddComponent<RectTransform>();
+            rectTransform.anchorMin = Vector2.zero;
+            rectTransform.anchorMax = Vector2.one;
+            rectTransform.sizeDelta = Vector2.zero;
+            rectTransform.offsetMin = new Vector2(10, 10);
+            rectTransform.offsetMax = new Vector2(-10, -10);
+
+            Image bg = welcomePanel.AddComponent<Image>();
+            bg.color = new Color(0.15f, 0.15f, 0.15f, 1f);
+
+            // Create content container for text
+            GameObject content = new GameObject("WelcomeContent");
+            content.transform.SetParent(welcomePanel.transform, false);
+
+            RectTransform contentRect = content.AddComponent<RectTransform>();
+            contentRect.anchorMin = Vector2.zero;
+            contentRect.anchorMax = Vector2.one;
+            contentRect.sizeDelta = Vector2.zero;
+            contentRect.offsetMin = new Vector2(20, 20);
+            contentRect.offsetMax = new Vector2(-20, -20);
+
+            TextMeshProUGUI text = content.AddComponent<TextMeshProUGUI>();
+            text.text = "Welcome to Admin Tools\n\n" +
+                        "This tool provides various administrative functions for SPT Tarkov:\n\n" +
+                        "• Items Tab: Browse and manage all game items\n" +
+                        "• Weapons Tab: Spawn one of your weapon builds\n" +
+                        "• Skills Tab: Modify player skills\n" +
+                        "• Traders Tab: Manage trader relations and inventory\n\n" +
+                        "Select a tab above to get started.";
+            text.fontSize = 16;
+            text.color = Color.white;
+            text.alignment = TextAlignmentOptions.TopLeft;
+            text.enableWordWrapping = true;
         }
 
         private void CreateItemsSplitView(GameObject parent)
@@ -805,21 +838,7 @@ namespace AdminTools
             contentRect.anchorMin = new Vector2(0, 1);
             contentRect.anchorMax = new Vector2(1, 1);
             contentRect.pivot = new Vector2(0.5f, 1);
-            contentRect.anchoredPosition = Vector2.zero;
-
-            // Add layout components
-            VerticalLayoutGroup layout = itemsContent.AddComponent<VerticalLayoutGroup>();
-            layout.padding = new RectOffset(5, 5, 5, 5);
-            layout.spacing = 2;
-            layout.childAlignment = TextAnchor.UpperLeft;
-            layout.childControlWidth = true;
-            layout.childForceExpandWidth = true;
-            layout.childControlHeight = false;
-            layout.childForceExpandHeight = false;
-
-            ContentSizeFitter sizeFitter = itemsContent.AddComponent<ContentSizeFitter>();
-            sizeFitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
-            sizeFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            contentRect.sizeDelta = new Vector2(0, items.Count * itemHeight);
 
             // Setup scroll view references
             scroll.content = contentRect;
@@ -829,10 +848,6 @@ namespace AdminTools
             scroll.scrollSensitivity = 35;
             scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
 
-            // Force immediate layout rebuild
-            LayoutRebuilder.ForceRebuildLayoutImmediate(contentRect);
-            LayoutRebuilder.ForceRebuildLayoutImmediate(scrollRect);
-
             // Only load items if they haven't been loaded yet
             if (items == null || items.Count == 0)
             {
@@ -840,7 +855,8 @@ namespace AdminTools
             }
             else
             {
-                UpdateItemsList();
+                // Initialize virtual scroll controller with existing items
+                new VirtualScrollController(scroll, items, this);
             }
         }
 
@@ -1194,6 +1210,158 @@ namespace AdminTools
             private void Update()
             {
                 rectTransform.Rotate(0, 0, -rotationSpeed * Time.deltaTime);
+            }
+        }
+
+        private class VirtualScrollController
+        {
+            private readonly AdminToolsPlugin parent;
+            private ScrollRect scrollRect;
+            private RectTransform content;
+            private float itemHeight = 28f;
+            private float viewportHeight;
+            private List<GameObject> pooledItems = new List<GameObject>();
+            private List<TemplateItem> items;
+            private int firstVisibleIndex = -1;
+            private int lastVisibleIndex = -1;
+            private const int BUFFER_ITEMS = 5;
+
+            public VirtualScrollController(ScrollRect scroll, List<TemplateItem> itemsList, AdminToolsPlugin parentPlugin)
+            {
+                parent = parentPlugin;
+                scrollRect = scroll;
+                content = scroll.content;
+                items = itemsList;
+
+                // Remove layout group and size fitter from content
+                if (content.GetComponent<LayoutGroup>() != null)
+                    UnityEngine.Object.Destroy(content.GetComponent<LayoutGroup>());
+                if (content.GetComponent<ContentSizeFitter>() != null)
+                    UnityEngine.Object.Destroy(content.GetComponent<ContentSizeFitter>());
+
+                // Set initial sizes
+                viewportHeight = ((RectTransform)scroll.viewport).rect.height;
+                float totalHeight = items.Count * itemHeight;
+                content.sizeDelta = new Vector2(0, totalHeight);
+
+                scrollRect.onValueChanged.AddListener(OnScroll);
+                CreateItemPool();
+                UpdateVisibleItems();
+            }
+
+            private void CreateItemPool()
+            {
+                int maxVisibleItems = Mathf.CeilToInt(viewportHeight / itemHeight) + (BUFFER_ITEMS * 2);
+                for (int i = 0; i < maxVisibleItems; i++)
+                {
+                    GameObject item = CreatePooledItem();
+                    pooledItems.Add(item);
+                    item.SetActive(false);
+                }
+            }
+
+            private GameObject CreatePooledItem()
+            {
+                GameObject itemButton = new GameObject("PooledItem");
+                itemButton.transform.SetParent(content, false);
+
+                RectTransform rectTransform = itemButton.AddComponent<RectTransform>();
+                rectTransform.anchorMin = new Vector2(0, 1);
+                rectTransform.anchorMax = new Vector2(1, 1);
+                rectTransform.sizeDelta = new Vector2(0, itemHeight);
+                rectTransform.pivot = new Vector2(0.5f, 1);
+
+                Image buttonBg = itemButton.AddComponent<Image>();
+                buttonBg.color = new Color(0.2f, 0.2f, 0.2f, 1f);
+
+                Button button = itemButton.AddComponent<Button>();
+                ColorBlock colors = button.colors;
+                colors.normalColor = new Color(0.2f, 0.2f, 0.2f, 1f);
+                colors.highlightedColor = new Color(0.3f, 0.3f, 0.3f, 1f);
+                colors.pressedColor = new Color(0.25f, 0.25f, 0.25f, 1f);
+                colors.selectedColor = new Color(0.3f, 0.3f, 0.3f, 1f);
+                button.colors = colors;
+
+                GameObject textContainer = new GameObject("Text");
+                textContainer.transform.SetParent(itemButton.transform, false);
+
+                RectTransform textRect = textContainer.AddComponent<RectTransform>();
+                textRect.anchorMin = Vector2.zero;
+                textRect.anchorMax = Vector2.one;
+                textRect.sizeDelta = new Vector2(-24, 0);
+
+                TextMeshProUGUI itemText = textContainer.AddComponent<TextMeshProUGUI>();
+                itemText.fontSize = 13;
+                itemText.alignment = TextAlignmentOptions.Left;
+                itemText.color = new Color(0.9f, 0.9f, 0.9f, 0.95f);
+
+                return itemButton;
+            }
+
+            private void OnScroll(Vector2 value)
+            {
+                UpdateVisibleItems();
+            }
+
+            private void UpdateVisibleItems()
+            {
+                if (items == null || items.Count == 0) return;
+
+                // Calculate visible range based on normalized scroll position
+                float normalizedPos = scrollRect.verticalNormalizedPosition;
+                float contentHeight = items.Count * itemHeight;
+                float scrollableHeight = contentHeight - viewportHeight;
+                float scrollPos = (1 - normalizedPos) * scrollableHeight;
+
+                int newFirstVisible = Mathf.Max(0, Mathf.FloorToInt(scrollPos / itemHeight) - BUFFER_ITEMS);
+                int newLastVisible = Mathf.Min(items.Count - 1,
+                    newFirstVisible + Mathf.CeilToInt(viewportHeight / itemHeight) + BUFFER_ITEMS);
+
+                if (newFirstVisible != firstVisibleIndex || newLastVisible != lastVisibleIndex)
+                {
+                    foreach (var item in pooledItems)
+                    {
+                        item.SetActive(false);
+                    }
+
+                    int poolIndex = 0;
+                    for (int i = newFirstVisible; i <= newLastVisible && poolIndex < pooledItems.Count; i++)
+                    {
+                        var pooledItem = pooledItems[poolIndex];
+                        UpdatePooledItem(pooledItem, items[i], i);
+                        pooledItem.SetActive(true);
+                        poolIndex++;
+                    }
+
+                    firstVisibleIndex = newFirstVisible;
+                    lastVisibleIndex = newLastVisible;
+                }
+            }
+
+            private void UpdatePooledItem(GameObject pooledItem, TemplateItem item, int index)
+            {
+                RectTransform rect = pooledItem.GetComponent<RectTransform>();
+
+                // Position relative to content top
+                float yPos = -(index * itemHeight);
+                rect.anchoredPosition = new Vector2(0, yPos);
+
+                var text = pooledItem.GetComponentInChildren<TextMeshProUGUI>();
+                text.text = item.name;
+
+                var button = pooledItem.GetComponent<Button>();
+                button.onClick.RemoveAllListeners();
+                button.onClick.AddListener(() => OnItemSelected(item));
+            }
+
+            private void OnItemSelected(TemplateItem item)
+            {
+                foreach (var pooledItem in pooledItems)
+                {
+                    pooledItem.GetComponent<Image>().color = new Color(0.2f, 0.2f, 0.2f, 1f);
+                }
+                parent.selectedItem = item;
+                parent.UpdateItemDetails();
             }
         }
     }
