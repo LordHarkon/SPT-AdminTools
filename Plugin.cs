@@ -17,6 +17,7 @@ using System.IO;
 using SPT.Common.Http;
 using System.Threading.Tasks;
 using System.Net.Http;
+using EFT.UI;
 
 namespace AdminTools
 {
@@ -614,8 +615,18 @@ namespace AdminTools
                     Destroy(loadingContainer.gameObject);
                 }
 
-                UpdateItemsList();
-                _logger.LogInfo($"Items loaded successfully: {items.Count} items");
+                if (itemsResponse.data != null)
+                {
+                    // Filter out items without icons
+                    items = itemsResponse.data.Where(item => !string.IsNullOrEmpty(item.icon)).ToList();
+                    _logger.LogInfo($"Items loaded successfully: {items.Count} items");
+                    UpdateItemsList();
+                }
+                else
+                {
+                    _logger.LogError("Failed to load items: Response data is null");
+                }
+                yield return null;
             }
         }
 
@@ -1145,6 +1156,7 @@ namespace AdminTools
             private int firstVisibleIndex = -1;
             private int lastVisibleIndex = -1;
             private const int BUFFER_ITEMS = 5;
+            private string selectedItemId;
 
             public VirtualScrollController(ScrollRect scroll, List<TemplateItem> itemsList, AdminToolsPlugin parentPlugin)
             {
@@ -1188,10 +1200,10 @@ namespace AdminTools
                 RectTransform rectTransform = itemButton.AddComponent<RectTransform>();
                 rectTransform.anchorMin = new Vector2(0, 1);
                 rectTransform.anchorMax = new Vector2(1, 1);
-                rectTransform.sizeDelta = new Vector2(-10, itemHeight - 2); // Added horizontal padding and vertical spacing
+                rectTransform.sizeDelta = new Vector2(-10, itemHeight - 2);
                 rectTransform.pivot = new Vector2(0.5f, 1);
 
-                // Background object with rounded corners
+                // Background
                 GameObject background = new GameObject("Background");
                 background.transform.SetParent(itemButton.transform, false);
 
@@ -1199,13 +1211,27 @@ namespace AdminTools
                 bgRect.anchorMin = Vector2.zero;
                 bgRect.anchorMax = Vector2.one;
                 bgRect.sizeDelta = Vector2.zero;
-                bgRect.offsetMin = new Vector2(0, 1); // Left and bottom margin
-                bgRect.offsetMax = new Vector2(0, -1); // Right and top margin
+                bgRect.offsetMin = new Vector2(5, 1);
+                bgRect.offsetMax = new Vector2(-5, -1);
 
                 Image buttonBg = background.AddComponent<Image>();
                 buttonBg.color = new Color(0.2f, 0.2f, 0.2f, 1f);
 
-                // Text object
+                // Icon
+                GameObject iconObj = new GameObject("Icon");
+                iconObj.transform.SetParent(itemButton.transform, false);
+
+                RectTransform iconRect = iconObj.AddComponent<RectTransform>();
+                iconRect.anchorMin = new Vector2(0, 0.5f);
+                iconRect.anchorMax = new Vector2(0, 0.5f);
+                iconRect.pivot = new Vector2(0, 0.5f);
+                iconRect.sizeDelta = new Vector2(16, 16);
+                iconRect.anchoredPosition = new Vector2(10, 0);
+
+                Image iconImage = iconObj.AddComponent<Image>();
+                iconImage.preserveAspect = true;
+
+                // Text with adjusted position for icon
                 GameObject textObj = new GameObject("Text");
                 textObj.transform.SetParent(itemButton.transform, false);
 
@@ -1213,16 +1239,16 @@ namespace AdminTools
                 textRect.anchorMin = Vector2.zero;
                 textRect.anchorMax = Vector2.one;
                 textRect.sizeDelta = Vector2.zero;
+                textRect.offsetMin = new Vector2(32, 0); // Make room for icon
+                textRect.offsetMax = new Vector2(-5, 0);
 
                 TextMeshProUGUI itemText = textObj.AddComponent<TextMeshProUGUI>();
                 itemText.fontSize = 13;
                 itemText.color = Color.white;
                 itemText.alignment = TextAlignmentOptions.Left;
-                itemText.margin = new Vector4(24, 0, 0, 0);
                 itemText.enableWordWrapping = false;
                 itemText.overflowMode = TextOverflowModes.Truncate;
 
-                // Button component on main object
                 Button button = itemButton.AddComponent<Button>();
                 button.transition = Selectable.Transition.None;
                 button.navigation = new Navigation { mode = Navigation.Mode.None };
@@ -1274,46 +1300,149 @@ namespace AdminTools
             private void UpdatePooledItem(GameObject pooledItem, TemplateItem item, int index)
             {
                 RectTransform rect = pooledItem.GetComponent<RectTransform>();
-
-                // Position relative to content top
                 float yPos = -(index * itemHeight);
                 rect.anchoredPosition = new Vector2(0, yPos);
 
                 var text = pooledItem.GetComponentInChildren<TextMeshProUGUI>();
                 text.text = item.name;
 
+                // Set item ID
+                var itemData = pooledItem.GetComponent<ItemData>();
+                if (itemData == null)
+                    itemData = pooledItem.AddComponent<ItemData>();
+                itemData.id = item.id;
+
+                // Update icon
+                var iconImage = pooledItem.transform.Find("Icon")?.GetComponent<Image>();
+                if (iconImage != null && !string.IsNullOrEmpty(item.icon))
+                {
+                    parent.StartCoroutine(LoadIcon(item.icon, iconImage));
+                }
+
                 var button = pooledItem.GetComponent<Button>();
                 button.onClick.RemoveAllListeners();
                 button.onClick.AddListener(() => OnItemSelected(item));
+
+                // Set background color based on selection
+                var background = pooledItem.transform.Find("Background");
+                if (background != null)
+                {
+                    var buttonBg = background.GetComponent<Image>();
+                    buttonBg.color = (item.id == selectedItemId)
+                        ? new Color(0.3f, 0.5f, 0.9f, 1f)
+                        : new Color(0.2f, 0.2f, 0.2f, 1f);
+                }
             }
 
             private void OnItemSelected(TemplateItem item)
             {
+                selectedItemId = item.id;
+
                 foreach (var pooledItem in pooledItems)
                 {
                     var background = pooledItem.transform.Find("Background");
                     if (background != null)
                     {
                         var buttonBg = background.GetComponent<Image>();
-                        buttonBg.color = new Color(0.2f, 0.2f, 0.2f, 1f);
-                    }
-                }
-
-                var selectedPooledItem = pooledItems.FirstOrDefault(p =>
-                    p.GetComponentInChildren<TextMeshProUGUI>()?.text == item.name);
-                if (selectedPooledItem != null)
-                {
-                    var background = selectedPooledItem.transform.Find("Background");
-                    if (background != null)
-                    {
-                        var buttonBg = background.GetComponent<Image>();
-                        buttonBg.color = new Color(0.3f, 0.5f, 0.9f, 1f);
+                        var itemData = pooledItem.GetComponent<ItemData>();
+                        buttonBg.color = (itemData != null && itemData.id == selectedItemId)
+                            ? new Color(0.3f, 0.5f, 0.9f, 1f)
+                            : new Color(0.2f, 0.2f, 0.2f, 1f);
                     }
                 }
 
                 parent.selectedItem = item;
                 parent.UpdateItemDetails();
             }
+
+            private IEnumerator LoadIcon(string iconPath, Image iconImage)
+            {
+                // Remove "/files/" from the beginning if present
+                iconPath = iconPath.Replace("/files/", "");
+
+                // Extract item type from icon path
+                EItemType itemType = EItemType.None;
+
+                // Handle weapon mods with incomplete paths
+                if (iconPath == "handbook/")
+                {
+                    itemType = EItemType.Mod;
+                }
+                else if (iconPath.Contains("icon_weapons"))
+                {
+                    itemType = EItemType.Weapon;
+                    if (iconPath.Contains("_melee"))
+                        itemType = EItemType.Knife;
+                }
+                else if (iconPath.Contains("icon_ammo"))
+                {
+                    itemType = EItemType.Ammo;
+                }
+                else if (iconPath.Contains("icon_medical"))
+                {
+                    itemType = EItemType.Meds;
+                }
+                else if (iconPath.Contains("icon_money") || iconPath.Contains("icon_barter"))
+                {
+                    itemType = EItemType.Barter;
+                }
+                else if (iconPath.Contains("icon_maps"))
+                {
+                    itemType = EItemType.Info;
+                }
+                else if (iconPath.Contains("icon_gear"))
+                {
+                    if (iconPath.Contains("_backpacks"))
+                        itemType = EItemType.Backpack;
+                    else if (iconPath.Contains("_armor"))
+                        itemType = EItemType.Armor;
+                    else if (iconPath.Contains("_rigs"))
+                        itemType = EItemType.Rig;
+                    else if (iconPath.Contains("_cases"))
+                        itemType = EItemType.Container;
+                    else if (iconPath.Contains("_headwear") || iconPath.Contains("_visors"))
+                        itemType = EItemType.Equipment;
+                    else if (iconPath.Contains("_goggles") || iconPath.Contains("_facecovers"))
+                        itemType = EItemType.Goggles;
+                    else
+                        itemType = EItemType.Equipment;
+                }
+                else if (iconPath.Contains("icon_mod_") || iconPath.Contains("icon_mods"))
+                {
+                    itemType = EItemType.Mod;
+                    if (iconPath.Contains("_magazine"))
+                        itemType = EItemType.Magazine;
+                }
+                else if (iconPath.Contains("icon_keys"))
+                {
+                    itemType = EItemType.Keys;
+                }
+                else if (iconPath.Contains("icon_provisions"))
+                {
+                    itemType = EItemType.Food;
+                }
+                else if (iconPath.Contains("icon_quest"))
+                {
+                    itemType = EItemType.Special;
+                }
+                else if (iconPath.Contains("icon_spec"))
+                {
+                    itemType = EItemType.Special;
+                }
+
+                // Load icon from game files
+                var sprite = EFTHardSettings.Instance.StaticIcons.GetItemTypeIcon(itemType);
+                if (sprite != null)
+                {
+                    iconImage.sprite = sprite;
+                }
+                yield return null;
+            }
+        }
+
+        private class ItemData : MonoBehaviour
+        {
+            public string id;
         }
     }
 }
