@@ -17,6 +17,8 @@ using System.IO;
 using SPT.Common.Http;
 using System.Threading.Tasks;
 using System.Net.Http;
+using EFT.UI;
+using System.Text;
 
 namespace AdminTools
 {
@@ -26,9 +28,10 @@ namespace AdminTools
         private static BepInEx.Logging.ManualLogSource _logger;
         private GameObject windowObject;
         private ConfigEntry<KeyboardShortcut> ToggleKey { get; set; }
-        private string currentTab = "Items";
+        private string currentTab = "Welcome";
         private List<TemplateItem> items = new List<TemplateItem>();
         private TemplateItem selectedItem;
+        private const float itemHeight = 28f;  // Add at class level
 
         private void Awake()
         {
@@ -57,14 +60,13 @@ namespace AdminTools
 
         private void ToggleWindow()
         {
-            if (windowObject != null)
+            if (windowObject == null)
             {
-                Destroy(windowObject);
-                windowObject = null;
+                CreateWindow();
             }
             else
             {
-                CreateWindow();
+                windowObject.SetActive(!windowObject.activeSelf);
             }
         }
 
@@ -210,8 +212,7 @@ namespace AdminTools
 
             // Add click handler
             button.onClick.AddListener(() => {
-                Destroy(windowObject);
-                windowObject = null;
+                windowObject.SetActive(false);
             });
         }
 
@@ -327,6 +328,9 @@ namespace AdminTools
             contentRect.offsetMin = new Vector2(0, 0);
             contentRect.offsetMax = new Vector2(0, -60);
 
+            // Create welcome panel
+            CreateWelcomePanel(content);
+
             // Create split view for Items tab
             CreateItemsSplitView(content);
 
@@ -338,17 +342,48 @@ namespace AdminTools
             // Set initial visibility
             foreach (Transform child in content.transform)
             {
-                bool isVisible = false;
-                if (currentTab == "Items")
-                {
-                    isVisible = (child.name == "ItemsList" || child.name == "ItemDetails");
-                }
-                else
-                {
-                    isVisible = child.name == $"Content_{currentTab}";
-                }
-                child.gameObject.SetActive(isVisible);
+                child.gameObject.SetActive(child.name == $"Content_{currentTab}");
             }
+        }
+
+        private void CreateWelcomePanel(GameObject parent)
+        {
+            GameObject welcomePanel = new GameObject("Content_Welcome");
+            welcomePanel.transform.SetParent(parent.transform, false);
+
+            RectTransform rectTransform = welcomePanel.AddComponent<RectTransform>();
+            rectTransform.anchorMin = Vector2.zero;
+            rectTransform.anchorMax = Vector2.one;
+            rectTransform.sizeDelta = Vector2.zero;
+            rectTransform.offsetMin = new Vector2(10, 10);
+            rectTransform.offsetMax = new Vector2(-10, -10);
+
+            Image bg = welcomePanel.AddComponent<Image>();
+            bg.color = new Color(0.15f, 0.15f, 0.15f, 1f);
+
+            // Create content container for text
+            GameObject content = new GameObject("WelcomeContent");
+            content.transform.SetParent(welcomePanel.transform, false);
+
+            RectTransform contentRect = content.AddComponent<RectTransform>();
+            contentRect.anchorMin = Vector2.zero;
+            contentRect.anchorMax = Vector2.one;
+            contentRect.sizeDelta = Vector2.zero;
+            contentRect.offsetMin = new Vector2(20, 20);
+            contentRect.offsetMax = new Vector2(-20, -20);
+
+            TextMeshProUGUI text = content.AddComponent<TextMeshProUGUI>();
+            text.text = "Welcome to Admin Tools\n\n" +
+                        "This tool provides various administrative functions for SPT Tarkov:\n\n" +
+                        "• Items Tab: Browse and manage all game items\n" +
+                        "• Weapons Tab: Spawn one of your weapon builds\n" +
+                        "• Skills Tab: Modify player skills\n" +
+                        "• Traders Tab: Manage trader relations and inventory\n\n" +
+                        "Select a tab above to get started.";
+            text.fontSize = 16;
+            text.color = Color.white;
+            text.alignment = TextAlignmentOptions.TopLeft;
+            text.enableWordWrapping = true;
         }
 
         private void CreateItemsSplitView(GameObject parent)
@@ -581,8 +616,18 @@ namespace AdminTools
                     Destroy(loadingContainer.gameObject);
                 }
 
-                UpdateItemsList();
-                _logger.LogInfo($"Items loaded successfully: {items.Count} items");
+                if (itemsResponse.data != null)
+                {
+                    // Filter out items without icons
+                    items = itemsResponse.data.Where(item => !string.IsNullOrEmpty(item.icon)).ToList();
+                    _logger.LogInfo($"Items loaded successfully: {items.Count} items");
+                    UpdateItemsList();
+                }
+                else
+                {
+                    _logger.LogError("Failed to load items: Response data is null");
+                }
+                yield return null;
             }
         }
 
@@ -666,16 +711,6 @@ namespace AdminTools
                 return;
             }
 
-            // Log the full hierarchy for debugging
-            _logger.LogInfo("Searching for ItemsContent in hierarchy:");
-            Transform current = windowObject.transform;
-            while (current != null)
-            {
-                _logger.LogInfo($"- {current.name}");
-                current = current.parent;
-            }
-
-            // Try to find ItemsList first
             Transform itemsList = windowObject.transform.Find("Panel/Content/ItemsList");
             if (itemsList == null)
             {
@@ -689,84 +724,14 @@ namespace AdminTools
             {
                 _logger.LogInfo("Creating ScrollView structure");
                 CreateItemsScrollView(itemsList.gameObject);
+                return; // CreateItemsScrollView will handle initialization
             }
 
-            Transform content = itemsList.Find("ScrollView/Viewport/ItemsContent");
-            if (content == null)
+            // If ScrollView exists, just update the virtual scroller
+            ScrollRect scroll = scrollView.GetComponent<ScrollRect>();
+            if (scroll != null && items != null && items.Count > 0)
             {
-                _logger.LogError("ItemsContent still not found after creation!");
-                return;
-            }
-
-            // Clear existing items
-            foreach (Transform child in content)
-            {
-                Destroy(child.gameObject);
-            }
-
-            foreach (TemplateItem item in items)
-            {
-                GameObject itemButton = new GameObject(item.id);
-                itemButton.transform.SetParent(content, false);
-
-                RectTransform rectTransform = itemButton.AddComponent<RectTransform>();
-                rectTransform.anchorMin = new Vector2(0, 0);
-                rectTransform.anchorMax = new Vector2(1, 0);
-                rectTransform.sizeDelta = new Vector2(-16, 28);  // Added horizontal padding
-                rectTransform.anchoredPosition = new Vector2(8, 0);  // Center the button
-
-                LayoutElement layoutElement = itemButton.AddComponent<LayoutElement>();
-                layoutElement.minHeight = 28;
-                layoutElement.flexibleWidth = 1;
-                layoutElement.minWidth = -1;  // Allow the layout to handle width
-                layoutElement.preferredWidth = -1;  // Allow the layout to handle width
-
-                Image buttonBg = itemButton.AddComponent<Image>();
-                buttonBg.color = new Color(0.2f, 0.2f, 0.2f, 1f);
-
-                Button button = itemButton.AddComponent<Button>();
-                ColorBlock colors = button.colors;
-                colors.normalColor = new Color(0.2f, 0.2f, 0.2f, 1f);
-                colors.highlightedColor = new Color(0.3f, 0.3f, 0.3f, 1f);
-                colors.pressedColor = new Color(0.25f, 0.25f, 0.25f, 1f);
-                colors.selectedColor = new Color(0.3f, 0.3f, 0.3f, 1f);
-                colors.fadeDuration = 0.1f;
-                button.colors = colors;
-
-                // Create text container
-                GameObject textContainer = new GameObject("Text");
-                textContainer.transform.SetParent(itemButton.transform, false);
-
-                RectTransform textRect = textContainer.AddComponent<RectTransform>();
-                textRect.anchorMin = new Vector2(0, 0);
-                textRect.anchorMax = new Vector2(1, 1);
-                textRect.sizeDelta = new Vector2(-24, 0);
-                textRect.anchoredPosition = Vector2.zero;
-
-                TextMeshProUGUI itemText = textContainer.AddComponent<TextMeshProUGUI>();
-                itemText.text = item.name;
-                itemText.fontSize = 13;
-                itemText.alignment = TextAlignmentOptions.Left;
-                itemText.enableWordWrapping = false;
-                itemText.overflowMode = TextOverflowModes.Ellipsis;
-                itemText.margin = new Vector4(40, 0, 0, 0);
-                itemText.color = new Color(0.9f, 0.9f, 0.9f, 0.95f);
-
-                // Button click handler
-                button.onClick.AddListener(() => {
-                    selectedItem = item;
-
-                    // Update visual selection
-                    foreach (Transform child in content)
-                    {
-                        child.GetComponent<Image>().color =
-                            child.name == item.id ?
-                            new Color(0.3f, 0.3f, 0.32f, 1f) :
-                            new Color(0.2f, 0.2f, 0.22f, 0.8f);
-                    }
-
-                    UpdateItemDetails();
-                });
+                new VirtualScrollController(scroll, items, this);
             }
         }
 
@@ -805,21 +770,7 @@ namespace AdminTools
             contentRect.anchorMin = new Vector2(0, 1);
             contentRect.anchorMax = new Vector2(1, 1);
             contentRect.pivot = new Vector2(0.5f, 1);
-            contentRect.anchoredPosition = Vector2.zero;
-
-            // Add layout components
-            VerticalLayoutGroup layout = itemsContent.AddComponent<VerticalLayoutGroup>();
-            layout.padding = new RectOffset(5, 5, 5, 5);
-            layout.spacing = 2;
-            layout.childAlignment = TextAnchor.UpperLeft;
-            layout.childControlWidth = true;
-            layout.childForceExpandWidth = true;
-            layout.childControlHeight = false;
-            layout.childForceExpandHeight = false;
-
-            ContentSizeFitter sizeFitter = itemsContent.AddComponent<ContentSizeFitter>();
-            sizeFitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
-            sizeFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            contentRect.sizeDelta = new Vector2(0, items.Count * itemHeight);
 
             // Setup scroll view references
             scroll.content = contentRect;
@@ -829,10 +780,6 @@ namespace AdminTools
             scroll.scrollSensitivity = 35;
             scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
 
-            // Force immediate layout rebuild
-            LayoutRebuilder.ForceRebuildLayoutImmediate(contentRect);
-            LayoutRebuilder.ForceRebuildLayoutImmediate(scrollRect);
-
             // Only load items if they haven't been loaded yet
             if (items == null || items.Count == 0)
             {
@@ -840,13 +787,14 @@ namespace AdminTools
             }
             else
             {
-                UpdateItemsList();
+                // Initialize virtual scroll controller with existing items
+                new VirtualScrollController(scroll, items, this);
             }
         }
 
-        private void UpdateItemDetails()
+        private void UpdateItemDetails(TemplateItem details)
         {
-            if (selectedItem == null) return;
+            if (details == null) return;
 
             Transform detailsPanel = windowObject.transform.Find("Panel/Content/ItemDetails");
             if (detailsPanel == null) return;
@@ -865,8 +813,8 @@ namespace AdminTools
             scrollRect.anchorMin = Vector2.zero;
             scrollRect.anchorMax = Vector2.one;
             scrollRect.sizeDelta = Vector2.zero;
-            scrollRect.offsetMin = new Vector2(5, 5);  // Left, Bottom padding
-            scrollRect.offsetMax = new Vector2(-5, -5); // Right, Top padding
+            scrollRect.offsetMin = new Vector2(5, 5);
+            scrollRect.offsetMax = new Vector2(-5, -5);
 
             ScrollRect scroll = scrollView.AddComponent<ScrollRect>();
             Image scrollBg = scrollView.AddComponent<Image>();
@@ -896,7 +844,7 @@ namespace AdminTools
             VerticalLayoutGroup layout = content.AddComponent<VerticalLayoutGroup>();
             ContentSizeFitter fitter = content.AddComponent<ContentSizeFitter>();
 
-            layout.padding = new RectOffset(5, 5, 5, 5);
+            layout.padding = new RectOffset(50, 45, 0, 0);
             layout.spacing = 5;
             layout.childAlignment = TextAnchor.UpperLeft;
             layout.childControlWidth = true;
@@ -912,10 +860,172 @@ namespace AdminTools
             scroll.vertical = true;
 
             // Add details sections
-            CreateDetailSection(content, "Name", selectedItem.name);
-            CreateDetailSection(content, "Description", selectedItem.description);
-            CreateDetailSection(content, "ID", selectedItem.id);
-            CreateDetailSection(content, "Price", $"{selectedItem.price:N0} ₽");
+            CreateDetailSection(content, "Name", details.name);
+            CreateDetailSection(content, "Description", details.description);
+            CreateDetailSection(content, "ID", details.id);
+            CreateDetailSection(content, "Price", $"{details.price:N0} ₽");
+
+            // Add bundle preview if available
+            if (!string.IsNullOrEmpty(details.bundle))
+            {
+                CreateBundlePreview(content, details.bundle);
+            }
+        }
+
+        private void CreateBundlePreview(GameObject parent, string bundlePath)
+        {
+            GameObject section = new GameObject("Section_Bundle");
+            section.transform.SetParent(parent.transform, false);
+
+            RectTransform sectionRect = section.AddComponent<RectTransform>();
+            sectionRect.anchorMin = Vector2.zero;
+            sectionRect.anchorMax = Vector2.one;
+            sectionRect.sizeDelta = Vector2.zero;
+
+            VerticalLayoutGroup layout = section.AddComponent<VerticalLayoutGroup>();
+            ContentSizeFitter fitter = section.AddComponent<ContentSizeFitter>();
+
+            layout.padding = new RectOffset(50, 50, 10, 10);
+            layout.spacing = 5;
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childForceExpandWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandHeight = false;
+
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            // Create bundle preview container
+            GameObject previewObj = new GameObject("Preview");
+            previewObj.transform.SetParent(section.transform, false);
+
+            RectTransform previewRect = previewObj.AddComponent<RectTransform>();
+            previewRect.anchorMin = new Vector2(0, 0);
+            previewRect.anchorMax = new Vector2(1, 1);
+            previewRect.sizeDelta = Vector2.zero;
+
+            // Add layout element for sizing
+            LayoutElement previewLayout = previewObj.AddComponent<LayoutElement>();
+            previewLayout.minHeight = 200;
+            previewLayout.preferredHeight = 200;
+            previewLayout.flexibleWidth = 1;
+
+            // Add image component for background
+            Image previewImage = previewObj.AddComponent<Image>();
+            previewImage.color = new Color(0.1f, 0.1f, 0.1f, 1f);
+
+            // Load and display bundle
+            if (!string.IsNullOrEmpty(bundlePath))
+            {
+                StartCoroutine(LoadBundle(bundlePath, previewObj));
+            }
+        }
+
+        private IEnumerator LoadBundle(string bundlePath, GameObject previewObj)
+        {
+            string gamePath = AppDomain.CurrentDomain.BaseDirectory;
+            string fullBundlePath = Path.Combine(gamePath, "EscapeFromTarkov_Data", "StreamingAssets", "Windows", bundlePath);
+
+            _logger.LogInfo($"Loading bundle from: {fullBundlePath}");
+
+            var bundle = AssetBundle.LoadFromFile(fullBundlePath);
+            if (bundle != null)
+            {
+                try
+                {
+                    string[] assetNames = bundle.GetAllAssetNames();
+                    _logger.LogInfo($"Available assets in bundle: {string.Join(", ", assetNames)}");
+
+                    // Look for container or simple model first
+                    string assetName = assetNames.FirstOrDefault(name =>
+                        name.Contains("_container.") ||
+                        name.Contains("_simple.") ||
+                        name.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase));
+
+                    if (!string.IsNullOrEmpty(assetName))
+                    {
+                        _logger.LogInfo($"Loading asset: {assetName}");
+
+                        var asset = bundle.LoadAsset<GameObject>(assetName);
+                        if (asset != null)
+                        {
+                            // Create preview container
+                            GameObject previewContainer = new GameObject("PreviewContainer");
+                            previewContainer.transform.SetParent(previewObj.transform, false);
+
+                            RectTransform containerRect = previewContainer.AddComponent<RectTransform>();
+                            containerRect.anchorMin = Vector2.zero;
+                            containerRect.anchorMax = Vector2.one;
+                            containerRect.sizeDelta = Vector2.zero;
+
+                            // Create image component
+                            Image itemImage = previewContainer.AddComponent<Image>();
+                            itemImage.preserveAspect = true;
+
+                            // Create render texture
+                            RenderTexture renderTexture = new RenderTexture(512, 512, 16, RenderTextureFormat.ARGB32);
+                            renderTexture.Create();
+
+                            // Setup camera
+                            GameObject cameraObj = new GameObject("PreviewCamera");
+                            Camera camera = cameraObj.AddComponent<Camera>();
+                            camera.clearFlags = CameraClearFlags.SolidColor;
+                            camera.backgroundColor = new Color(0.1f, 0.1f, 0.1f, 0f);
+                            camera.orthographic = true;
+                            camera.orthographicSize = 0.3f;
+                            camera.targetTexture = renderTexture;
+                            camera.transform.position = new Vector3(0, 0.3f, -1f);
+
+                            // Instantiate model
+                            GameObject model = Instantiate(asset);
+                            model.transform.position = Vector3.zero;
+                            model.transform.rotation = Quaternion.Euler(0, 45, 0);
+
+                            // Add lighting
+                            GameObject lightObj = new GameObject("PreviewLight");
+                            Light light = lightObj.AddComponent<Light>();
+                            light.type = LightType.Directional;
+                            light.intensity = 1.2f;
+                            lightObj.transform.rotation = Quaternion.Euler(50, -30, 0);
+
+                            // Render to texture
+                            camera.Render();
+
+                            // Convert render texture to sprite
+                            Texture2D tex = new Texture2D(renderTexture.width, renderTexture.height, TextureFormat.RGBA32, false);
+                            RenderTexture.active = renderTexture;
+                            tex.ReadPixels(new Rect(0, 0, renderTexture.width, renderTexture.height), 0, 0);
+                            tex.Apply();
+
+                            // Create and assign sprite
+                            Sprite sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+                            itemImage.sprite = sprite;
+
+                            // Cleanup
+                            yield return new WaitForEndOfFrame();
+                            RenderTexture.active = null;
+                            Destroy(model);
+                            Destroy(cameraObj);
+                            Destroy(lightObj);
+                            renderTexture.Release();
+                        }
+                        else
+                        {
+                            _logger.LogError($"Failed to load asset: {assetName}");
+                        }
+                    }
+                }
+                finally
+                {
+                    bundle.Unload(false);
+                }
+            }
+            else
+            {
+                _logger.LogError($"Failed to load bundle: {fullBundlePath}");
+            }
+
+            yield return null;
         }
 
         private void CreateDetailSection(GameObject parent, string label, string value)
@@ -1194,6 +1304,371 @@ namespace AdminTools
             private void Update()
             {
                 rectTransform.Rotate(0, 0, -rotationSpeed * Time.deltaTime);
+            }
+        }
+
+        private class VirtualScrollController
+        {
+            private readonly AdminToolsPlugin parent;
+            private ScrollRect scrollRect;
+            private RectTransform content;
+            private float itemHeight = 28f;
+            private float viewportHeight;
+            private List<GameObject> pooledItems = new List<GameObject>();
+            private List<TemplateItem> items;
+            private int firstVisibleIndex = -1;
+            private int lastVisibleIndex = -1;
+            private const int BUFFER_ITEMS = 5;
+            private string selectedItemId;
+
+            public VirtualScrollController(ScrollRect scroll, List<TemplateItem> itemsList, AdminToolsPlugin parentPlugin)
+            {
+                parent = parentPlugin;
+                scrollRect = scroll;
+                content = scroll.content;
+                items = itemsList;
+
+                // Remove layout group and size fitter from content
+                if (content.GetComponent<LayoutGroup>() != null)
+                    UnityEngine.Object.Destroy(content.GetComponent<LayoutGroup>());
+                if (content.GetComponent<ContentSizeFitter>() != null)
+                    UnityEngine.Object.Destroy(content.GetComponent<ContentSizeFitter>());
+
+                // Set initial sizes
+                viewportHeight = ((RectTransform)scroll.viewport).rect.height;
+                float totalHeight = items.Count * itemHeight;
+                content.sizeDelta = new Vector2(0, totalHeight);
+
+                scrollRect.onValueChanged.AddListener(OnScroll);
+                CreateItemPool();
+                UpdateVisibleItems();
+            }
+
+            private void CreateItemPool()
+            {
+                int maxVisibleItems = Mathf.CeilToInt(viewportHeight / itemHeight) + (BUFFER_ITEMS * 2);
+                for (int i = 0; i < maxVisibleItems; i++)
+                {
+                    GameObject item = CreatePooledItem();
+                    pooledItems.Add(item);
+                    item.SetActive(false);
+                }
+            }
+
+            private GameObject CreatePooledItem()
+            {
+                GameObject itemButton = new GameObject("PooledItem");
+                itemButton.transform.SetParent(content, false);
+
+                RectTransform rectTransform = itemButton.AddComponent<RectTransform>();
+                rectTransform.anchorMin = new Vector2(0, 1);
+                rectTransform.anchorMax = new Vector2(1, 1);
+                rectTransform.sizeDelta = new Vector2(-10, itemHeight - 2);
+                rectTransform.pivot = new Vector2(0.5f, 1);
+
+                // Background
+                GameObject background = new GameObject("Background");
+                background.transform.SetParent(itemButton.transform, false);
+
+                RectTransform bgRect = background.AddComponent<RectTransform>();
+                bgRect.anchorMin = Vector2.zero;
+                bgRect.anchorMax = Vector2.one;
+                bgRect.sizeDelta = Vector2.zero;
+                bgRect.offsetMin = new Vector2(5, 1);
+                bgRect.offsetMax = new Vector2(-5, -1);
+
+                Image buttonBg = background.AddComponent<Image>();
+                buttonBg.color = new Color(0.2f, 0.2f, 0.2f, 1f);
+
+                // Icon
+                GameObject iconObj = new GameObject("Icon");
+                iconObj.transform.SetParent(itemButton.transform, false);
+
+                RectTransform iconRect = iconObj.AddComponent<RectTransform>();
+                iconRect.anchorMin = new Vector2(0, 0.5f);
+                iconRect.anchorMax = new Vector2(0, 0.5f);
+                iconRect.pivot = new Vector2(0, 0.5f);
+                iconRect.sizeDelta = new Vector2(16, 16);
+                iconRect.anchoredPosition = new Vector2(10, 0);
+
+                Image iconImage = iconObj.AddComponent<Image>();
+                iconImage.preserveAspect = true;
+
+                // Text with adjusted position for icon
+                GameObject textObj = new GameObject("Text");
+                textObj.transform.SetParent(itemButton.transform, false);
+
+                RectTransform textRect = textObj.AddComponent<RectTransform>();
+                textRect.anchorMin = Vector2.zero;
+                textRect.anchorMax = Vector2.one;
+                textRect.sizeDelta = Vector2.zero;
+                textRect.offsetMin = new Vector2(32, 0); // Make room for icon
+                textRect.offsetMax = new Vector2(-5, 0);
+
+                TextMeshProUGUI itemText = textObj.AddComponent<TextMeshProUGUI>();
+                itemText.fontSize = 13;
+                itemText.color = Color.white;
+                itemText.alignment = TextAlignmentOptions.Left;
+                itemText.enableWordWrapping = false;
+                itemText.overflowMode = TextOverflowModes.Truncate;
+
+                Button button = itemButton.AddComponent<Button>();
+                button.transition = Selectable.Transition.None;
+                button.navigation = new Navigation { mode = Navigation.Mode.None };
+                button.targetGraphic = buttonBg;
+
+                return itemButton;
+            }
+
+            private void OnScroll(Vector2 value)
+            {
+                UpdateVisibleItems();
+            }
+
+            private void UpdateVisibleItems()
+            {
+                if (items == null || items.Count == 0) return;
+
+                // Calculate visible range based on normalized scroll position
+                float normalizedPos = scrollRect.verticalNormalizedPosition;
+                float contentHeight = items.Count * itemHeight;
+                float scrollableHeight = contentHeight - viewportHeight;
+                float scrollPos = (1 - normalizedPos) * scrollableHeight;
+
+                int newFirstVisible = Mathf.Max(0, Mathf.FloorToInt(scrollPos / itemHeight) - BUFFER_ITEMS);
+                int newLastVisible = Mathf.Min(items.Count - 1,
+                    newFirstVisible + Mathf.CeilToInt(viewportHeight / itemHeight) + BUFFER_ITEMS);
+
+                if (newFirstVisible != firstVisibleIndex || newLastVisible != lastVisibleIndex)
+                {
+                    foreach (var item in pooledItems)
+                    {
+                        item.SetActive(false);
+                    }
+
+                    int poolIndex = 0;
+                    for (int i = newFirstVisible; i <= newLastVisible && poolIndex < pooledItems.Count; i++)
+                    {
+                        var pooledItem = pooledItems[poolIndex];
+                        UpdatePooledItem(pooledItem, items[i], i);
+                        pooledItem.SetActive(true);
+                        poolIndex++;
+                    }
+
+                    firstVisibleIndex = newFirstVisible;
+                    lastVisibleIndex = newLastVisible;
+                }
+            }
+
+            private void UpdatePooledItem(GameObject pooledItem, TemplateItem item, int index)
+            {
+                RectTransform rect = pooledItem.GetComponent<RectTransform>();
+                float yPos = -(index * itemHeight);
+                rect.anchoredPosition = new Vector2(0, yPos);
+
+                var text = pooledItem.GetComponentInChildren<TextMeshProUGUI>();
+                text.text = item.name;
+
+                // Set item ID
+                var itemData = pooledItem.GetComponent<ItemData>();
+                if (itemData == null)
+                    itemData = pooledItem.AddComponent<ItemData>();
+                itemData.id = item.id;
+
+                // Update icon
+                var iconImage = pooledItem.transform.Find("Icon")?.GetComponent<Image>();
+                if (iconImage != null && !string.IsNullOrEmpty(item.icon))
+                {
+                    parent.StartCoroutine(LoadIcon(item.icon, iconImage));
+                }
+
+                var button = pooledItem.GetComponent<Button>();
+                button.onClick.RemoveAllListeners();
+                button.onClick.AddListener(() => OnItemSelected(item));
+
+                // Set background color based on selection
+                var background = pooledItem.transform.Find("Background");
+                if (background != null)
+                {
+                    var buttonBg = background.GetComponent<Image>();
+                    buttonBg.color = (item.id == selectedItemId)
+                        ? new Color(0.3f, 0.5f, 0.9f, 1f)
+                        : new Color(0.2f, 0.2f, 0.2f, 1f);
+                }
+            }
+
+            private void OnItemSelected(TemplateItem item)
+            {
+                selectedItemId = item.id;
+
+                foreach (var pooledItem in pooledItems)
+                {
+                    var background = pooledItem.transform.Find("Background");
+                    if (background != null)
+                    {
+                        var buttonBg = background.GetComponent<Image>();
+                        var itemData = pooledItem.GetComponent<ItemData>();
+                        buttonBg.color = (itemData != null && itemData.id == selectedItemId)
+                            ? new Color(0.3f, 0.5f, 0.9f, 1f)
+                            : new Color(0.2f, 0.2f, 0.2f, 1f);
+                    }
+                }
+
+                parent.selectedItem = item;
+                parent.StartCoroutine(UpdateItemDetailsAsync(item.id));
+            }
+
+            private IEnumerator UpdateItemDetailsAsync(string itemId)
+            {
+                string apiUrl = parent.GetBackendUrl();
+                string sessionId = parent.GetSessionId();
+
+                using (var client = new Client(apiUrl, sessionId))
+                {
+                    var jsonContent = JsonConvert.SerializeObject(new { id = itemId });
+                    var request = client.PostAsync("/admin-tools/items/info", Encoding.UTF8.GetBytes(jsonContent));
+                    while (!request.IsCompleted)
+                    {
+                        yield return null;
+                    }
+
+                    byte[] responseBytes = request.Result;
+                    string responseText = System.Text.Encoding.UTF8.GetString(responseBytes);
+                    var itemResponse = JsonConvert.DeserializeObject<ItemInfoResponse>(responseText);
+
+                    if (itemResponse?.data != null)
+                    {
+                        parent.UpdateItemDetails(itemResponse.data);
+                    }
+                    else
+                    {
+                        _logger.LogError($"Failed to get item info for {itemId}: Response data is null");
+                    }
+                }
+            }
+
+            private IEnumerator LoadIcon(string iconPath, Image iconImage)
+            {
+                // Remove "/files/" from the beginning if present
+                iconPath = iconPath.Replace("/files/", "");
+
+                // Extract item type from icon path
+                EItemType itemType = EItemType.None;
+
+                // Handle weapon mods with incomplete paths
+                if (iconPath == "handbook/")
+                {
+                    itemType = EItemType.Mod;
+                }
+                else if (iconPath.Contains("icon_weapons"))
+                {
+                    itemType = EItemType.Weapon;
+                    if (iconPath.Contains("_melee"))
+                        itemType = EItemType.Knife;
+                }
+                else if (iconPath.Contains("icon_ammo"))
+                {
+                    itemType = EItemType.Ammo;
+                }
+                else if (iconPath.Contains("icon_medical"))
+                {
+                    itemType = EItemType.Meds;
+                }
+                else if (iconPath.Contains("icon_money") || iconPath.Contains("icon_barter"))
+                {
+                    itemType = EItemType.Barter;
+                }
+                else if (iconPath.Contains("icon_maps"))
+                {
+                    itemType = EItemType.Info;
+                }
+                else if (iconPath.Contains("icon_gear"))
+                {
+                    if (iconPath.Contains("_backpacks"))
+                        itemType = EItemType.Backpack;
+                    else if (iconPath.Contains("_armor"))
+                        itemType = EItemType.Armor;
+                    else if (iconPath.Contains("_rigs"))
+                        itemType = EItemType.Rig;
+                    else if (iconPath.Contains("_cases"))
+                        itemType = EItemType.Container;
+                    else if (iconPath.Contains("_headwear") || iconPath.Contains("_visors"))
+                        itemType = EItemType.Equipment;
+                    else if (iconPath.Contains("_goggles") || iconPath.Contains("_facecovers"))
+                        itemType = EItemType.Goggles;
+                    else
+                        itemType = EItemType.Equipment;
+                }
+                else if (iconPath.Contains("icon_mod_") || iconPath.Contains("icon_mods"))
+                {
+                    itemType = EItemType.Mod;
+                    if (iconPath.Contains("_magazine"))
+                        itemType = EItemType.Magazine;
+                }
+                else if (iconPath.Contains("icon_keys"))
+                {
+                    itemType = EItemType.Keys;
+                }
+                else if (iconPath.Contains("icon_provisions"))
+                {
+                    itemType = EItemType.Food;
+                }
+                else if (iconPath.Contains("icon_quest"))
+                {
+                    itemType = EItemType.Special;
+                }
+                else if (iconPath.Contains("icon_spec"))
+                {
+                    itemType = EItemType.Special;
+                }
+
+                // Load icon from game files
+                var sprite = EFTHardSettings.Instance.StaticIcons.GetItemTypeIcon(itemType);
+                if (sprite != null)
+                {
+                    iconImage.sprite = sprite;
+                }
+                yield return null;
+            }
+        }
+
+        private IEnumerator GetItemInfo(string itemId)
+        {
+            string apiUrl = GetBackendUrl();
+            string sessionId = GetSessionId();
+
+            using (var client = new Client(apiUrl, sessionId))
+            {
+                var jsonContent = JsonConvert.SerializeObject(new { id = itemId });
+                var request = client.PostAsync("/admin-tools/items/info", Encoding.UTF8.GetBytes(jsonContent));
+                while (!request.IsCompleted)
+                {
+                    yield return null;
+                }
+
+                byte[] responseBytes = request.Result;
+                string responseText = System.Text.Encoding.UTF8.GetString(responseBytes);
+                var itemResponse = JsonConvert.DeserializeObject<ItemInfoResponse>(responseText);
+
+                if (itemResponse?.data != null)
+                {
+                    UpdateItemDetails(itemResponse.data);
+                }
+                else
+                {
+                    _logger.LogError($"Failed to get item info for {itemId}: Response data is null");
+                }
+            }
+        }
+
+        // Add this class to handle model rotation
+        private class ModelRotator : MonoBehaviour
+        {
+            private float rotationSpeed = 30f;
+
+            private void Update()
+            {
+                transform.Rotate(Vector3.up, rotationSpeed * Time.deltaTime);
             }
         }
     }
